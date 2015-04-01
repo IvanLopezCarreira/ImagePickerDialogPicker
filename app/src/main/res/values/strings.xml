@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">ImagePicker</string>
+
+    <string name="hello_world">Hello world!</string>
+    <string name="action_settings">Settings</string>
+
+    <!-- picker buttons -->
+    <string name="camera_btn">Cámara</string>
+    <string name="gallery_btn">Galería</string>
+</resources>
