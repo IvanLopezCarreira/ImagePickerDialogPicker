@@ -7,13 +7,13 @@ import java.io.File;
 /**
  * Created by ivancarreira on 01/04/15.
  */
-public interface ProcessImage {
+public interface ImageProcessor {
 
     interface Callback {
         void onImageProcessed(String outputPath, Bitmap bitmap);
-        void onUnmountedExternalStorage();
+        //void onUnmountedExternalStorage();
         void onIOError();
     }
 
-    void execute(final File inputPath,final File outputPath, final Callback callback);
+    void execute(final File inputPath,final File outputPath, int sampleSizeToOptions, final Callback callback);
 }

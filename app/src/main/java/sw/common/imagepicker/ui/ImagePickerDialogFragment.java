@@ -12,10 +12,10 @@ import java.util.Date;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Matrix;
-import android.media.ExifInterface;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
@@ -33,10 +33,8 @@ import android.widget.RelativeLayout;
 import sw.common.imagepicker.BuildConfig;
 import sw.common.imagepicker.R;
 import sw.common.imagepicker.SDUtils;
-import sw.common.imagepicker.domain.ProcessImage;
-import sw.common.imagepicker.domain.ProcessImageInteractorFactory;
-import sw.common.imagepicker.executor.Executor;
-import sw.common.imagepicker.executor.MainThread;
+import sw.common.imagepicker.domain.ImageProcessor;
+import sw.common.imagepicker.domain.ImageProcessorInteractorFactory;
 import sw.common.imagepicker.filesRoutes.ImagePickerFilesRoutes;
 
 public class ImagePickerDialogFragment extends DialogFragment implements OnClickListener{
@@ -49,32 +47,34 @@ public class ImagePickerDialogFragment extends DialogFragment implements OnClick
     private final static String KEY_OUTPUT_FILE = "key_output_file";
     private final static String KEY_CACHE_PHOTO_FILE = "key_cache_photo_file";
 
+    private final static int DEFAULT_SAMPLE_SIZE_OPTIONS = 2;
+
     private LinearLayout selectButtonsLayout;
     private RelativeLayout processImageLayout;
 
     private ImagePickerFilesRoutes mImagePickerFilesRoutes;
 
 	private File cachePhotoFile;//This is route to image on externalCacheDir where camera save image
-    private String outputFilePath;//This is route to image on dependant app permanent directory where processed image will save
+    private File outputFile;//This is route to image on dependant app permanent directory where processed image will save
     private TakePhoto mCallback;
 
-    private ProcessImage processImage;
+    private ImageProcessor imageProcessor;
 
 
     //To return result to caller
-    public void setPhotoTakenInterface(TakePhoto photoTakenInterface){
+    public void setPhotoTakenInterface(TakePhoto photoTakenInterface) {
         this.mCallback = photoTakenInterface;
     }
 
     /**
      * This method must be called before .show()
-     * @param outputFilePath
+     * @param outputFile
      * @param imagePickerFilesRoutes
      */
 
-    public void setPhotoFile(String outputFilePath, ImagePickerFilesRoutes imagePickerFilesRoutes) {
+    public void setPhotoFile(File outputFile, ImagePickerFilesRoutes imagePickerFilesRoutes) {
         this.mImagePickerFilesRoutes = imagePickerFilesRoutes;
-        this.outputFilePath = outputFilePath;
+        this.outputFile = outputFile;
     }
 
 	@Override
@@ -82,7 +82,7 @@ public class ImagePickerDialogFragment extends DialogFragment implements OnClick
 		super.onCreate(savedInstanceState);
 
         if (savedInstanceState != null) {
-            outputFilePath = savedInstanceState.getString(KEY_OUTPUT_FILE);
+            outputFile = (File)savedInstanceState.getSerializable(KEY_OUTPUT_FILE);
             cachePhotoFile = (File)savedInstanceState.getSerializable(KEY_CACHE_PHOTO_FILE);
         }
 
@@ -113,7 +113,7 @@ public class ImagePickerDialogFragment extends DialogFragment implements OnClick
     @Override
     public void onSaveInstanceState(Bundle outState) {
         outState.putSerializable(KEY_CACHE_PHOTO_FILE, cachePhotoFile);
-        outState.putString(KEY_OUTPUT_FILE, outputFilePath);
+        outState.putSerializable(KEY_OUTPUT_FILE, outputFile);
 
         super.onSaveInstanceState(outState);
     }
@@ -123,7 +123,7 @@ public class ImagePickerDialogFragment extends DialogFragment implements OnClick
         if (BuildConfig.DEBUG){
             Log.e(TAG, "onClick");
         }
-        if (mImagePickerFilesRoutes == null || mCallback == null || outputFilePath == null) {
+        if (mImagePickerFilesRoutes == null || mCallback == null || outputFile == null) {
             Log.e(TAG, "this Dialog needs you calls \"setPhotoFile(String outputFilePath, ImagePickerFilesRoutes imagePickerFilesRoutes)\" and \"setPhotoTakenInterface(TakePhoto photoTakenInterface)\"");
             return;
         }
@@ -132,7 +132,7 @@ public class ImagePickerDialogFragment extends DialogFragment implements OnClick
             if (BuildConfig.DEBUG){
                 Log.e(TAG, "fd_camera");
             }
-            if (createCacheFileOnPublicDirectory()) {
+            if (createCacheFileOnExternalCacheDirectory()) {
                 Intent takePictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
 
                 if (cachePhotoFile != null) {
@@ -151,7 +151,7 @@ public class ImagePickerDialogFragment extends DialogFragment implements OnClick
 		}
 	}
 
-    private boolean createCacheFileOnPublicDirectory() {
+    private boolean createCacheFileOnExternalCacheDirectory() {
         boolean fileCreated = false;
 
         if (mImagePickerFilesRoutes.isExternalStorageReadable() && mImagePickerFilesRoutes.isExternalStorageWritable()) {
@@ -167,13 +167,13 @@ public class ImagePickerDialogFragment extends DialogFragment implements OnClick
                 }
             } catch (IOException e) {
                 e.printStackTrace();
-                mCallback.onIOError();
+                onIOError();
                 dismiss();
                 return false;
             }
             return fileCreated;
         } else {
-            mCallback.onUnmountedExternalStorage();
+            onUnmountedExternalStorage();
             dismiss();
             return false;
         }
@@ -186,7 +186,6 @@ public class ImagePickerDialogFragment extends DialogFragment implements OnClick
     private void changeToProcessLayout() {
         selectButtonsLayout.setVisibility(View.GONE);
         processImageLayout.setVisibility(View.VISIBLE);
-        setCancelable(false);
     }
 
     @Override
@@ -206,15 +205,12 @@ public class ImagePickerDialogFragment extends DialogFragment implements OnClick
 
                 testImageOnCache();
                 changeToProcessLayout();
-                processImage();
+                setDialogNotCancelable();
 
-                //moveFileFromToSelectedDir(cachePhotoFile, outputFilePath);
+                processImage(null); // In background
 
-                //testImage();
-                //onPhotoTaken(outputFilePath);
-
-                } else if (requestCode == ImagePickerDialogFragment.REQUEST_IMAGE_GALLERY) {
-                /*Log.e(TAG, "request image gallery");
+            } else if (requestCode == ImagePickerDialogFragment.REQUEST_IMAGE_GALLERY) {
+                Log.e(TAG, "request image gallery");
                 Uri selectedImage = data.getData();
                 String[] filePathColumn = {MediaStore.Images.Media.DATA};
 
@@ -225,10 +221,9 @@ public class ImagePickerDialogFragment extends DialogFragment implements OnClick
                 String filePath = cursor.getString(columnIndex);
                 cursor.close();
 
-                String savedFotoName ="temp.jpeg";
-                filePath = SDUtils.moveFileToAppCache(getActivity(), filePath, savedFotoName);
+                processImage(filePath);
 
-                //userPhotoPath = filePath;
+                /*//Comment this
                 Bitmap bitmap = null;
                 try {
                     BitmapFactory.Options options = new BitmapFactory.Options();
@@ -240,37 +235,46 @@ public class ImagePickerDialogFragment extends DialogFragment implements OnClick
                     }
                 } catch (OutOfMemoryError e){
                     Log.d(TAG, "Out of memory" + e.getStackTrace().toString());
-                }
-                onPhotoTaken(bitmap);*/
+                }*/
             } else {
                 if (BuildConfig.DEBUG) {
                     Log.e(TAG, "code not implemented");
                 }
             }
-        }else{
+        }else {
             if (BuildConfig.DEBUG) {
                 Log.e(TAG, "canceled");
             }
+            dismiss();
         }
     }
 
     //used to rotate image if ExifInterface is not NORMAL
-    private void processImage() {
+    private void processImage(String filePath) {
         Log.d(TAG, "processImage()");
 
-        ProcessImageInteractorFactory processImageInteractorFactory = new ProcessImageInteractorFactory();
-        processImage = processImageInteractorFactory.getProcessImage();
+        ImageProcessorInteractorFactory imageProcessorInteractorFactory = new ImageProcessorInteractorFactory();
+        imageProcessor = imageProcessorInteractorFactory.getProcessImage();
 
-        processImage.execute(cachePhotoFile, new File(outputFilePath), new ProcessImage.Callback() {
+        ImageProcessor.Callback callback = new ImageProcessor.Callback() {
             @Override
             public void onImageProcessed(String outputPath, Bitmap bitmap) {
                 Log.d(TAG, "onImageProcessed CALLBACK");
-                dismiss();
-            }
+                if (bitmap != null) {
+                    Log.d(TAG, "returned bitmap size: " + bitmap.getByteCount() + " bytes");
+                } else {
+                    Log.e(TAG, "returned bitmap is null");
+                }
 
-            @Override
-            public void onUnmountedExternalStorage() {
-                Log.d(TAG, "onUnmountedExternalStorage CALLBACK");
+                Bitmap bitmapFromFile = BitmapFactory.decodeFile(outputPath);
+                if (bitmapFromFile != null) {
+                    Log.d(TAG, "returned bitmap size from output file: " + bitmap.getByteCount() + " bytes");
+                } else {
+                    Log.e(TAG, "returned bitmap from output file is null");
+                }
+
+                onPhotoTaken(outputPath, bitmap);
+
                 dismiss();
             }
 
@@ -279,59 +283,13 @@ public class ImagePickerDialogFragment extends DialogFragment implements OnClick
                 Log.d(TAG, "onIOError CALLBACK");
                 dismiss();
             }
-        });
+        };
 
-        /*Bitmap mPhoto = BitmapFactory.decodeFile(cachePhotoFile);
-
-        if (mPhoto == null) {
-            Log.e(TAG, "bitmap to process is null");
+        if (filePath == null) {
+            imageProcessor.execute(cachePhotoFile, outputFile, DEFAULT_SAMPLE_SIZE_OPTIONS, callback);
         } else {
-            Log.d(TAG, "Image bitmap to proccess bytes: " + mPhoto.getByteCount());
+            imageProcessor.execute(new File(filePath), outputFile, DEFAULT_SAMPLE_SIZE_OPTIONS, callback);
         }
-
-        //put image on view
-        ExifInterface exifInterface = null;
-        try {
-            exifInterface = new ExifInterface(cachePhotoFile);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        if (exifInterface != null) {
-            int orientation = exifInterface.getAttributeInt(ExifInterface.TAG_ORIENTATION, 1);
-            Log.d(TAG, "orientation: " + orientation);
-            switch (orientation) {
-                case ExifInterface.ORIENTATION_NORMAL:
-                    Log.d(TAG, "orientation_normal");
-                    //nothing to do
-                    break;
-                case ExifInterface.ORIENTATION_FLIP_HORIZONTAL:
-                    Log.d(TAG, "orientation_flip_horizontal");
-                    break;
-                case ExifInterface.ORIENTATION_FLIP_VERTICAL:
-                    Log.d(TAG, "orientation_flip_vertical");
-                    break;
-                case ExifInterface.ORIENTATION_ROTATE_90:
-                    Log.d(TAG, "orientation_rotate_90");
-                    rotateImage(mPhoto, 90);
-                    break;
-                case ExifInterface.ORIENTATION_ROTATE_180:
-                    Log.d(TAG, "orientation_rotate_180");
-                    rotateImage(mPhoto, 180);
-                    break;
-                case ExifInterface.ORIENTATION_ROTATE_270:
-                    Log.d(TAG, "orientation_rotate_270");
-                    rotateImage(mPhoto, 270);
-                    break;
-            }
-        }*/
-    }
-
-    private Bitmap rotateImage(Bitmap bitmap, int degrees) {
-        Matrix matrix = new Matrix();
-        matrix.postRotate(degrees);
-        Bitmap rotatedBitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
-
-        return rotatedBitmap;
     }
 
     private void testImageOnCache() {
@@ -345,8 +303,7 @@ public class ImagePickerDialogFragment extends DialogFragment implements OnClick
     }
 
     private void testImage() {
-        File file = new File(outputFilePath);
-        Bitmap bitmap = BitmapFactory.decodeFile(file.getAbsolutePath());
+        Bitmap bitmap = BitmapFactory.decodeFile(outputFile.getAbsolutePath());
         if (bitmap == null) {
             Log.d(TAG, "output bitmap is null");
         } else {
@@ -354,41 +311,25 @@ public class ImagePickerDialogFragment extends DialogFragment implements OnClick
         }
     }
 
-    private void moveFileFromToSelectedDir(String oldFilePath, String newFilePath) {
-        File oldFile = new File(cachePhotoFile.getAbsolutePath());
-        File newFile = new File(outputFilePath);
 
-        try {
-            InputStream in = null;
-            OutputStream out = null;
-
-            in = new FileInputStream(oldFile.getAbsolutePath());
-            boolean createNewFile = newFile.createNewFile();
-            Log.d(TAG, "new file created: " + createNewFile);
-
-            out = new FileOutputStream(newFile);
-            copyFile(in, out);
-
-            in.close();
-            in = null;
-
-            out.flush();
-            out.close();
-            out = null;
-            Log.d(TAG, "File moved: " + oldFile.getAbsolutePath() + " to " + newFile.getAbsolutePath());
-        } catch (IOException e) {
-            mCallback.onIOError();
-            e.printStackTrace();
-            Log.d(TAG, "File didnt move");
-        }
-    }
-
-
-    public void onPhotoTaken(String outputFilePath){
+    private void onPhotoTaken(String outputFilePath, Bitmap bitmap){
         if (mCallback != null){
-            mCallback.onPhotoTaken(outputFilePath);
+            mCallback.onPhotoTaken(outputFilePath, bitmap);
         }
     }
+
+    private void onIOError() {
+        if (mCallback != null) {
+            mCallback.onIOError();
+        }
+    }
+
+    private void onUnmountedExternalStorage() {
+        if (mCallback != null) {
+            mCallback.onUnmountedExternalStorage();
+        }
+    }
+
 
     public static boolean isExternalStorageReadable() {
         String state = Environment.getExternalStorageState();
@@ -397,72 +338,5 @@ public class ImagePickerDialogFragment extends DialogFragment implements OnClick
             return true;
         }
         return false;
-    }
-
-    public static String saveBitmapToExternalAppCache(Context context, Bitmap bitmap, String fileName){
-/*        String filePath = new String(getExternalCacheExtorage(context).getAbsolutePath() + File.separatorChar + fileName);
-        File file = new File(filePath);
-
-        FileOutputStream out = null;
-        try {
-            out = new FileOutputStream(file);
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out);
-            return file.getAbsolutePath();
-        } catch (Exception e) {
-            e.printStackTrace();
-        } finally {
-            try{
-                out.close();
-            } catch(Throwable ignore) {}
-        }
-        return "";*/
-        return null;
-    }
-
-    public static String moveFileToAppCache(Context context,String filePath, String fileName) {
-        //		File file = new File(filePath + fileName);
-        //		moved = file.renameTo(new File(SDUtils.getExternalCacheExtorage(context) + fileName));
-        //
-        //		return moved;
-/*        if (context == null || filePath == null || fileName == null || !existFile(filePath)) {
-            return "";
-        }*/
-        File oldFile = new File(filePath);
-        File newFile = new File(SDUtils.getExternalCacheExtorage(context) + File.separator + fileName);
-        try {
-            InputStream in = null;
-            OutputStream out = null;
-
-            in = new FileInputStream(oldFile.getAbsolutePath());
-            newFile.createNewFile();
-
-            out = new FileOutputStream(newFile);
-            copyFile(in, out);
-
-            in.close();
-            in = null;
-
-            out.flush();
-            out.close();
-            out = null;
-            Log.d(TAG, "File moved: " + filePath + " to " + SDUtils.getExternalCacheExtorage(context) + File.separator + fileName);
-        } catch (IOException e) {
-            e.printStackTrace();
-            Log.d(TAG, "File didnt move");
-        }
-        return newFile.getAbsolutePath();
-    }
-
-    private static void copyFile(InputStream in, OutputStream out) throws IOException {
-
-        byte[] buffer = new byte[1024];
-
-        int read;
-
-        while((read = in.read(buffer)) != -1){
-
-            out.write(buffer, 0, read);
-
-        }
     }
 }
