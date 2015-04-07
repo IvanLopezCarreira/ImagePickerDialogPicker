@@ -14,7 +14,6 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 
 import sw.common.imagepicker.R;
-import sw.common.imagepicker.SDUtils;
 import sw.common.imagepicker.filesRoutes.ImagePickerFilesRoutes;
 
 
@@ -55,7 +54,6 @@ public class MainActivity extends ActionBarActivity implements TakePhoto {
     }
 
     public void launchPicker(View v) {
-        Log.d(TAG, "isExternalStorageWritable: " + SDUtils.isExternalStorageWritable());
         ImagePickerDialogFragment pickerDialogFragment = new ImagePickerDialogFragment();
         File outputFile = new ImagePickerFilesRoutes(getApplicationContext()).getImagePermanentFileOnPrivateAppExternalStorage(null, generateFileName());
         Log.d(TAG, "filepath passed: " + outputFile.getAbsolutePath());

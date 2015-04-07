@@ -32,7 +32,6 @@ import android.widget.RelativeLayout;
 
 import sw.common.imagepicker.BuildConfig;
 import sw.common.imagepicker.R;
-import sw.common.imagepicker.SDUtils;
 import sw.common.imagepicker.domain.ImageProcessor;
 import sw.common.imagepicker.domain.ImageProcessorInteractorFactory;
 import sw.common.imagepicker.filesRoutes.ImagePickerFilesRoutes;
@@ -223,19 +222,6 @@ public class ImagePickerDialogFragment extends DialogFragment implements OnClick
 
                 processImage(filePath);
 
-                /*//Comment this
-                Bitmap bitmap = null;
-                try {
-                    BitmapFactory.Options options = new BitmapFactory.Options();
-                    options.inSampleSize = 2;
-                    bitmap = BitmapFactory.decodeFile(filePath, options);
-
-                    if (bitmap != null){
-                        Log.e(TAG, "photo bitmap is not null");
-                    }
-                } catch (OutOfMemoryError e){
-                    Log.d(TAG, "Out of memory" + e.getStackTrace().toString());
-                }*/
             } else {
                 if (BuildConfig.DEBUG) {
                     Log.e(TAG, "code not implemented");
